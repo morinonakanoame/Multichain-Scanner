@@ -54,36 +54,35 @@ async def process_bnb_scan(
             else:
                 raise aiohttp.ServerConnectionError()
 
-            if isinstance(result, dict):
-                if 'transactions' in result:
-                    transactions = result['transactions']
-                    for transaction in transactions:
-                        if 'to' in transaction:
-                            _to = transaction['to']                        
-                            if _to.lower() == u_row.lower():
-                                _to = 'Received'
-                            else:
-                                _to = None
-                        if 'from' in transaction:
-                            _from = transaction['from']  
-                            if _from.lower() == u_row.lower():
-                                _from = 'Sent'
-                            else:
-                                _from = None
-                            
-                        if _to is None and _from is None:
-                            continue
+            if 'transactions' in result:
+                transactions = result['transactions']
+                for transaction in transactions:
+                    if 'to' in transaction:
+                        _to = transaction['to']                        
+                        if _to.lower() == u_row.lower():
+                            _to = 'Received'
                         else:
-                            if 'hash' in transaction:
-                                _hash = transaction['hash']
-                                if 'value' in transaction:
-                                    pre_value = transaction['value']
-                                    pre_amount_tx = int(pre_value, 16)
-                                    value_tx = Decimal(pre_amount_tx) / Decimal(10**18)
-                                    
-                                    return {
-                                        'to': _to,
-                                        'from': _from,
-                                        'hash': _hash,
-                                        'value': value_tx
-                                    }
+                            _to = None
+                    if 'from' in transaction:
+                        _from = transaction['from']  
+                        if _from.lower() == u_row.lower():
+                            _from = 'Sent'
+                        else:
+                            _from = None
+                        
+                    if _to is None and _from is None:
+                        continue
+                    else:
+                        if 'hash' in transaction:
+                            _hash = transaction['hash']
+                            if 'value' in transaction:
+                                pre_value = transaction['value']
+                                pre_amount_tx = int(pre_value, 16)
+                                value_tx = Decimal(pre_amount_tx) / Decimal(10**18)
+                                
+                                return {
+                                    'to': _to,
+                                    'from': _from,
+                                    'hash': _hash,
+                                    'value': value_tx
+                                }
