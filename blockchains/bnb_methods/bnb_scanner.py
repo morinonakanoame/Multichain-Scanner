@@ -1,202 +1,89 @@
 from decimal import Decimal
 from typing import Optional
 
-from storage.lists_scanners import bnb_rows, bnb_hashes
-from alarms.bnb_alarm import bnb_data_alarm
-from others.cfg import log
 from .cfg import bnb_node
 
 import aiohttp
-import asyncio
 
 headers = {
     'Content-Type': 'application/json'
 }
-
-async def bnb_type_address(client_row: str) -> str:
-    if client_row not in bnb_hashes:
-        bnb_hashes[client_row] = {'Sent': set(),
-                                  'Received': set()}
-    return client_row
     
-async def bnb_get_req(ssn: aiohttp.ClientSession) -> Optional[dict]:
-    request_block_number = {"jsonrpc":"2.0",
-                            "method": 'eth_blockNumber',
-                            "params": [],
-                            "id":1}
+async def process_bnb_scan(
+    u_row: str
+    ) -> Optional[dict]:
     
-    try:
-        rspc = await ssn.post(url=bnb_node,
-                              json=request_block_number)
-        if rspc.status == 200:
-            data = await rspc.json()
-            if data != None:
-                return data
-        else:
-            raise aiohttp.ServerConnectionError()
-    except aiohttp.ClientError as a:
-        log(f'An error occurred while processing data from the server! - {a}')
-        
-async def getLastBlock(data: Optional[dict]) -> Optional[str]:
-    if 'result' in data:
-        result = data['result']
-        if result != None:
-            return result
-        return None
-    
-async def getDataInBlock(ssn: aiohttp.ClientSession, result: Optional[dict]) -> Optional[str]:
-    request_block = {"jsonrpc": "2.0",
-                     "method": 'eth_getBlockByNumber',
-                     "params": [result, True],
-                     "id": 1}
-    
-    try:
-        rspc = await ssn.post(url=bnb_node,
-                              json=request_block)
-        if rspc.status == 200:
-            data_block = await rspc.json()
-            if data_block != None:
-                return data_block
-        else:
-            raise aiohttp.ServerConnectionError()
-    except aiohttp.ClientError as a:
-        log(f'An error occurred while processing data from the server! - {a}')
-
-async def getDataTransaction(data_block: Optional[dict], client_row: str) -> Optional[dict]:
-    result = data_block['result']
-    if result is None:
-        return None
-    
-    transactions = result['transactions']
-    if transactions is None:
-        return None
-    
-    for transaction in transactions:
-        row_to = transaction['to']
-        if row_to == client_row:
-            return transaction
-        
-        from_to = transaction['from']
-        if from_to == client_row:
-            return transaction
-        
-async def getSenderInTransaction(client_row: str, transaction: Optional[dict]) -> Optional[tuple]:
-    try:
-        bnb_hash_tx = transaction['hash']
-        if bnb_hash_tx is None:
-            return None
-        
-        acc = transaction['from']
-        if acc == client_row:
-            type_tx = 'Sent'
-        else:
-            return None
-    except KeyError as a:
-        log(f'No found this key - {a}')
-    
-    data_type_tx = acc, type_tx, bnb_hash_tx
-    
-    if bnb_hash_tx not in bnb_hashes[client_row]['Sent']:
-        bnb_hashes[client_row]['Sent'].add(bnb_hash_tx)
-    else:
-        return None
-    return data_type_tx
-    
-async def getRecipientInTransaction(client_row: str, transaction: Optional[dict]) -> Optional[tuple]:
-    try:
-        bnb_hash_tx = transaction['hash']
-        if bnb_hash_tx is None:
-            return None
-        
-        acc = transaction['to']
-        if acc == client_row:
-            type_tx = 'Received'
-        else:
-            return None
-    except KeyError as a:
-        log(f'Not found this key - {a}')
-        
-    data_type_tx = acc, type_tx, bnb_hash_tx
-    
-    if bnb_hash_tx not in bnb_hashes[client_row]['Received']:
-        bnb_hashes[client_row]['Received'].add(bnb_hash_tx)
-    else: 
-        return None
-    return data_type_tx
-    
-async def getValueTx(transaction: Optional[dict]) -> Optional[Decimal]:
-    decimals = 18
-    
-    try:
-        raw_amount_tx = transaction['value']
-        if raw_amount_tx is None:
-            return None
-    except KeyError as a:
-        log(f'Not found this key - {a}')
-    
-    pre_amount_tx = int(raw_amount_tx, 16)
-    
-    amount_tx = Decimal(pre_amount_tx) / Decimal(10**decimals)
-    return amount_tx
-
-async def process_bnb_scan(ssn: aiohttp.ClientSession):
-    try:
-        getNumberBlock = await bnb_get_req(ssn)
-        if getNumberBlock is None:
-            return None
-        
-        getBlock = await getLastBlock(getNumberBlock)
-        if getBlock is None:
-            return None
-        
-        getDataBlock = await getDataInBlock(ssn,
-                                            getBlock)
-        if getDataBlock is None:
-            return None
-                
-        for user_id, rows in bnb_rows.items():
-            for bnb_row in rows:
-                getClient = await bnb_type_address(bnb_row)
-                if getClient is None:
-                    continue
-               
-                getDataTx = await getDataTransaction(getDataBlock,
-                                                     getClient)
-                if getDataTx is None:
-                    continue
-            
-                getSenderOrRecipient = await getSenderInTransaction(getClient,
-                                                                    getDataTx)
-                if getSenderOrRecipient is None:
-                    getSenderOrRecipient = await getRecipientInTransaction(getClient,
-                                                                           getDataTx)
-                    if getSenderOrRecipient is None:
-                        continue
-              
-                getValue = await getValueTx(getDataTx)
-                if getValue is None:
-                    continue
-             
-                _, type_tx, bnb_hash_tx = getSenderOrRecipient
-                
-                data_for_alarm = {'chat_id': user_id,
-                                'hash': bnb_hash_tx,
-                                'row': bnb_row,
-                                'type_tx': type_tx,
-                                'amount_tx': getValue}
-                await bnb_data_alarm(data_for_alarm)
-    except Exception as a:
-        log(f'Changes in data - {a}')
-        
-async def bnb_main_scan():
-    try:
-        async with aiohttp.ClientSession(
+    req_block_number = {
+        "jsonrpc":"2.0",
+        "method": 'eth_blockNumber',
+        "params": [],
+        "id":1
+        }
+    async with aiohttp.ClientSession(
             headers=headers
             ) as ssn:
-            
-            scan = True
-            while scan:
-                await process_bnb_scan(ssn)
-                await asyncio.sleep(0.425)
-    except aiohttp.ServerConnectionError as a:
-        log(f'An error occurred while connecting to the server! - {a}')
+        async with ssn.post(
+            url=bnb_node,
+            json=req_block_number
+            ) as rspc:
+            if rspc.status == 200:
+                data = await rspc.json()
+                if 'result' in data:
+                    num_block = data['result']
+                else:
+                    return None
+            else:
+                raise aiohttp.ServerConnectionError()
+        
+        req_block = {
+            "jsonrpc": "2.0",
+            "method": 'eth_getBlockByNumber',
+            "params": [num_block, True],
+            "id": 1
+            }
+        async with ssn.post(
+            url=bnb_node,
+            json=req_block
+            ) as rspc:
+            if rspc.status == 200:
+                block = await rspc.json()
+                if 'result' in block:
+                    result = block['result']
+                else:
+                    return None
+            else:
+                raise aiohttp.ServerConnectionError()
+
+            if isinstance(result, dict):
+                if 'transactions' in result:
+                    transactions = result['transactions']
+                    for transaction in transactions:
+                        if 'to' in transaction:
+                            _to = transaction['to']                        
+                            if _to.lower() == u_row.lower():
+                                _to = 'Received'
+                            else:
+                                _to = None
+                        if 'from' in transaction:
+                            _from = transaction['from']  
+                            if _from.lower() == u_row.lower():
+                                _from = 'Sent'
+                            else:
+                                _from = None
+                            
+                        if _to is None and _from is None:
+                            continue
+                        else:
+                            if 'hash' in transaction:
+                                _hash = transaction['hash']
+                                if 'value' in transaction:
+                                    pre_value = transaction['value']
+                                    pre_amount_tx = int(pre_value, 16)
+                                    value_tx = Decimal(pre_amount_tx) / Decimal(10**18)
+                                    
+                                    return {
+                                        'to': _to,
+                                        'from': _from,
+                                        'hash': _hash,
+                                        'value': value_tx
+                                    }
